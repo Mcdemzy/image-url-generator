@@ -1,20 +1,49 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DropZone from "./components/DropZone";
+import FolderInput from "./components/FolderInput";
 import QueueItemRow from "./components/QueueItemRow";
 import OutputBar from "./components/OutputBar";
 import Toasts, { type Toast } from "./components/Toasts";
 import { LIMITS, formatBytes } from "./lib/constants";
 import { cloudinaryUpload } from "./lib/cloudinary";
-import type { MediaType, QueueItem } from "./types";
+import { loadPersisted, savePersisted, toPersisted } from "./lib/storage";
+import type { MediaType, PersistedItem, QueueItem } from "./types";
 
 const uid = () =>
   `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
+// Rehydrate a persisted item into a QueueItem for display purposes.
+// No File, so it's display-only — that's why we don't allow retry on these.
+const fromPersisted = (p: PersistedItem): QueueItem => ({
+  id: p.id,
+  // Dummy file object — we never touch .file on done rows except for size/name
+  file: new File([], p.fileName, { type: "" }),
+  mediaType: p.mediaType,
+  previewUrl: "", // no preview after refresh
+  status: "done",
+  progress: 100,
+  url: p.url,
+  folder: p.folder,
+});
+
 const App = () => {
-  const [items, setItems] = useState<QueueItem[]>([]);
+  const [items, setItems] = useState<QueueItem[]>(() =>
+    loadPersisted().map(fromPersisted),
+  );
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [folder, setFolder] = useState("");
   const itemsRef = useRef(items);
   itemsRef.current = items;
+  const folderRef = useRef(folder);
+  folderRef.current = folder;
+
+  // Persist only "done" items whenever the queue changes
+  useEffect(() => {
+    const done: PersistedItem[] = items
+      .map(toPersisted)
+      .filter((x): x is PersistedItem => x !== null);
+    savePersisted(done);
+  }, [items]);
 
   const pushToast = useCallback((message: string, tone: Toast["tone"]) => {
     const id = uid();
@@ -29,16 +58,36 @@ const App = () => {
     (id: string) => {
       const item = itemsRef.current.find((i) => i.id === id);
       if (!item) return;
+      // Guard: never retry a persisted (File-less) item
+      if (!item.file.size && !item.file.type) {
+        pushToast("This item can't be re-uploaded after refresh.", "error");
+        return;
+      }
+      const targetFolder = item.folder ?? folderRef.current;
+
       setItems((prev) =>
         prev.map((i) =>
-          i.id === id ? { ...i, status: "uploading", progress: 0 } : i,
+          i.id === id
+            ? {
+                ...i,
+                status: "uploading",
+                progress: 0,
+                error: undefined,
+                folder: targetFolder,
+              }
+            : i,
         ),
       );
-      cloudinaryUpload(item, (pct) => {
-        setItems((prev) =>
-          prev.map((i) => (i.id === id ? { ...i, progress: pct } : i)),
-        );
-      })
+
+      cloudinaryUpload(
+        item,
+        (pct) => {
+          setItems((prev) =>
+            prev.map((i) => (i.id === id ? { ...i, progress: pct } : i)),
+          );
+        },
+        targetFolder,
+      )
         .then((url) => {
           setItems((prev) =>
             prev.map((i) =>
@@ -100,6 +149,7 @@ const App = () => {
           previewUrl: URL.createObjectURL(file),
           status: "pending",
           progress: 0,
+          folder: folderRef.current,
         });
       }
 
@@ -112,7 +162,6 @@ const App = () => {
       if (!accepted.length) return;
 
       setItems((prev) => [...prev, ...accepted]);
-      // kick off uploads on next tick so state is committed
       accepted.forEach((i) => setTimeout(() => startUpload(i.id), 0));
     },
     [pushToast, startUpload],
@@ -121,14 +170,17 @@ const App = () => {
   const removeItem = (id: string) => {
     setItems((prev) => {
       const target = prev.find((i) => i.id === id);
-      if (target) URL.revokeObjectURL(target.previewUrl);
+      if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
       return prev.filter((i) => i.id !== id);
     });
   };
 
+  const retryItem = (id: string) => startUpload(id);
+
   const clearAll = () => {
-    items.forEach((i) => URL.revokeObjectURL(i.previewUrl));
+    items.forEach((i) => i.previewUrl && URL.revokeObjectURL(i.previewUrl));
     setItems([]);
+    savePersisted([]);
   };
 
   const stats = useMemo(() => {
@@ -160,6 +212,11 @@ const App = () => {
       </header>
 
       <main className="mx-auto max-w-3xl px-4 py-6">
+        <FolderInput
+          value={folder}
+          onChange={setFolder}
+          disabled={items.length >= LIMITS.maxItems}
+        />
         <DropZone
           onFiles={handleFiles}
           disabled={items.length >= LIMITS.maxItems}
@@ -168,7 +225,12 @@ const App = () => {
         {items.length > 0 && (
           <ul className="mt-6 overflow-hidden rounded-lg border border-zinc-200 bg-white">
             {items.map((item) => (
-              <QueueItemRow key={item.id} item={item} onRemove={removeItem} />
+              <QueueItemRow
+                key={item.id}
+                item={item}
+                onRemove={removeItem}
+                onRetry={retryItem}
+              />
             ))}
           </ul>
         )}

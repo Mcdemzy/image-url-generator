@@ -5,6 +5,7 @@ import { formatBytes } from "../lib/constants";
 interface Props {
   item: QueueItem;
   onRemove: (id: string) => void;
+  onRetry: (id: string) => void;
 }
 
 const StatusPill = ({ item }: { item: QueueItem }) => {
@@ -25,7 +26,7 @@ const StatusPill = ({ item }: { item: QueueItem }) => {
   return <span className={`${base} bg-red-50 text-red-700`}>Failed</span>;
 };
 
-const QueueItemRow = ({ item, onRemove }: Props) => {
+const QueueItemRow = ({ item, onRemove, onRetry }: Props) => {
   const [copied, setCopied] = useState(false);
 
   const copy = async () => {
@@ -34,6 +35,10 @@ const QueueItemRow = ({ item, onRemove }: Props) => {
     setCopied(true);
     setTimeout(() => setCopied(false), 1200);
   };
+
+  // Persisted items (from a previous session) have a stub File with no
+  // content. Retrying them would upload an empty file, so we hide the button.
+  const canRetry = Boolean(item.file.type);
 
   return (
     <li className="flex gap-3 border-b border-zinc-100 px-4 py-3 last:border-b-0">
@@ -92,9 +97,19 @@ const QueueItemRow = ({ item, onRemove }: Props) => {
         )}
 
         {item.status === "error" && (
-          <p className="mt-1 text-xs text-red-600">
-            {item.error ?? "Upload failed"}
-          </p>
+          <div className="mt-1 flex items-center gap-2">
+            <p className="flex-1 text-xs text-red-600">
+              {item.error ?? "Upload failed"}
+            </p>
+            {canRetry && (
+              <button
+                onClick={() => onRetry(item.id)}
+                className="shrink-0 rounded border border-zinc-200 bg-white px-2 py-0.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50"
+              >
+                Retry
+              </button>
+            )}
+          </div>
         )}
       </div>
 

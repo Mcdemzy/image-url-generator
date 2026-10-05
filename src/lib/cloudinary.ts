@@ -12,10 +12,14 @@ if (!CLOUD_NAME || !UPLOAD_PRESET) {
 /**
  * Uploads a file to Cloudinary using an unsigned upload preset.
  * Uses XHR (not fetch) because we want real upload progress events.
+ *
+ * @param folder Optional folder path (e.g. "galleries/wedding-2026").
+ *               Overrides the preset's asset folder for this upload only.
  */
 export const cloudinaryUpload = (
   item: QueueItem,
   onProgress: (pct: number) => void,
+  folder?: string,
 ): Promise<string> => {
   return new Promise((resolve, reject) => {
     const resource = item.mediaType === "video" ? "video" : "image";
@@ -24,6 +28,9 @@ export const cloudinaryUpload = (
     const form = new FormData();
     form.append("file", item.file);
     form.append("upload_preset", UPLOAD_PRESET);
+    if (folder && folder.trim()) {
+      form.append("folder", folder.trim());
+    }
 
     const xhr = new XMLHttpRequest();
     xhr.open("POST", endpoint);
